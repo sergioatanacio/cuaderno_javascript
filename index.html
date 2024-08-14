@@ -1,10 +1,14 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
 const NotebookCell = ({ content, output, onContentChange, onExecute, showAsArray }) => {
+  const textareaRef = useRef(null);
+
   const formatOutput = (output) => {
     if (output === null) return null;
     if (showAsArray) {
@@ -16,9 +20,42 @@ const NotebookCell = ({ content, output, onContentChange, onExecute, showAsArray
     }
   };
 
+  const handleInsertCode = (codeSnippet) => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const newContent = content.substring(0, start) + codeSnippet + content.substring(end);
+      onContentChange(newContent);
+      setTimeout(() => {
+        textarea.focus();
+        const cursorPosition = start + codeSnippet.indexOf('{}') + 1;
+        textarea.setSelectionRange(cursorPosition, cursorPosition);
+      }, 0);
+    }
+  };
+
+  const codeSnippets = {
+    consoleLog: 'console.log({});\n',
+    readFile: 'readFile()\n',
+    writeFile: 'writeFile({})\n',
+    ifElse: 'if ({}) {\n  \n} else {\n  \n}\n',
+    while: 'while ({}) {\n  \n}\n',
+    for: 'for (let i = 0; i < {}; i++) {\n  \n}\n',
+    anonymousFunction: '(() => {\n  {}\n  return ;\n})()\n'
+  };
+
   return (
     <div className="mb-4 p-4 border rounded">
+      <div className="flex flex-wrap gap-2 mb-2">
+        {Object.entries(codeSnippets).map(([key, snippet]) => (
+          <Button key={key} onClick={() => handleInsertCode(snippet)}>
+            Insertar {key}
+          </Button>
+        ))}
+      </div>
       <Textarea
+        ref={textareaRef}
         value={content}
         onChange={(e) => onContentChange(e.target.value)}
         className="w-full mb-2"
@@ -34,11 +71,41 @@ const NotebookCell = ({ content, output, onContentChange, onExecute, showAsArray
   );
 };
 
+const FileEditor = ({ content, onContentChange, onSave }) => {
+  return (
+    <div className="mt-4">
+      <Textarea
+        value={content}
+        onChange={(e) => onContentChange(e.target.value)}
+        className="w-full mb-2"
+        rows={10}
+      />
+      <Button onClick={onSave}>Guardar Cambios</Button>
+    </div>
+  );
+};
+
 const NotebookApp = () => {
   const [cells, setCells] = useState([{ id: 1, content: '', output: null }]);
   const [showAsArray, setShowAsArray] = useState(true);
+  const [fileName, setFileName] = useState('');
+  const [fileContent, setFileContent] = useState('');
+  const [isFileEditorOpen, setIsFileEditorOpen] = useState(false);
   const outputRef = useRef(null);
   const contextRef = useRef({});
+  const fileInputRef = useRef(null);
+  const fileStorageRef = useRef({});
+  const notebookFileInputRef = useRef(null);
+
+  useEffect(() => {
+    contextRef.current.readFile = () => fileContent;
+    contextRef.current.writeFile = (content) => {
+      setFileContent(content);
+      if (fileName) {
+        fileStorageRef.current[fileName] = content;
+      }
+    };
+  }, [fileContent, fileName]);
 
   const executeJavaScript = (code) => {
     outputRef.current = null;
@@ -88,6 +155,78 @@ const NotebookApp = () => {
     setCells([...cells, { id: newId, content: '', output: null }]);
   };
 
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      setFileName(file.name);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target.result;
+        setFileContent(content);
+        fileStorageRef.current[file.name] = content;
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const handleFileSave = () => {
+    if (fileName && fileContent) {
+      const blob = new Blob([fileContent], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  const handleFileContentChange = (newContent) => {
+    setFileContent(newContent);
+  };
+
+  const handleFileEditorSave = () => {
+    if (fileName) {
+      fileStorageRef.current[fileName] = fileContent;
+    }
+    setIsFileEditorOpen(false);
+  };
+
+  const saveNotebook = () => {
+    const notebookData = {
+      cells,
+      fileName,
+      fileContent,
+      fileStorage: fileStorageRef.current
+    };
+    const blob = new Blob([JSON.stringify(notebookData)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'notebook.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const loadNotebook = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const notebookData = JSON.parse(e.target.result);
+          setCells(notebookData.cells);
+          setFileName(notebookData.fileName);
+          setFileContent(notebookData.fileContent);
+          fileStorageRef.current = notebookData.fileStorage;
+        } catch (error) {
+          console.error('Error al cargar el notebook:', error);
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
   return (
     <div className="container mx-auto p-4">
       <h1 className="text-2xl font-bold mb-4">JavaScript Notebook App</h1>
@@ -100,6 +239,36 @@ const NotebookApp = () => {
         <Label htmlFor="output-format">
           {showAsArray ? "Mostrar como Array" : "Mostrar como Texto"}
         </Label>
+      </div>
+      <div className="mb-4 flex space-x-2">
+        <Input type="file" onChange={handleFileUpload} ref={fileInputRef} className="flex-grow" />
+        <Button onClick={handleFileSave} disabled={!fileName}>Guardar Archivo</Button>
+        <Dialog open={isFileEditorOpen} onOpenChange={setIsFileEditorOpen}>
+          <DialogTrigger asChild>
+            <Button onClick={() => setIsFileEditorOpen(true)}>Editar Archivo</Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle>Editar Archivo</DialogTitle>
+            </DialogHeader>
+            <FileEditor 
+              content={fileContent}
+              onContentChange={handleFileContentChange}
+              onSave={handleFileEditorSave}
+            />
+          </DialogContent>
+        </Dialog>
+      </div>
+      <div className="mb-4 flex space-x-2">
+        <Button onClick={saveNotebook}>Guardar Notebook</Button>
+        <Input 
+          type="file" 
+          onChange={loadNotebook} 
+          ref={notebookFileInputRef} 
+          className="flex-grow"
+          accept=".json"
+        />
+        <Button onClick={() => notebookFileInputRef.current.click()}>Cargar Notebook</Button>
       </div>
       {cells.map(cell => (
         <NotebookCell
